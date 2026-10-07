@@ -5,6 +5,7 @@ import { Switch } from "@/components/ui/switch";
 import { supportsHudCaptureProtection } from "@/lib/hudCaptureProtection";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
+import { RtxRecordingSettingsSection } from "./RtxRecordingSettingsSection";
 export const DashboardSettingsContext = createContext<ReactNode>(null);
 export function DashboardSettings({ onImportFile }: { onImportFile: () => Promise<void> }) {
 	const settingsContent = useContext(DashboardSettingsContext);
@@ -12,6 +13,7 @@ export function DashboardSettings({ onImportFile }: { onImportFile: () => Promis
 	const [recordings, setRecordings] = useState("");
 	const [hideHud, setHideHud] = useState(true);
 	const [captureSupported, setCaptureSupported] = useState(false);
+	const [platform, setPlatform] = useState("");
 	const [busy, setBusy] = useState(false);
 	const run = async (action: () => Promise<void>) => {
 		setBusy(true);
@@ -30,11 +32,12 @@ export function DashboardSettings({ onImportFile }: { onImportFile: () => Promis
 			window.electronAPI.getHudOverlayCaptureProtection(),
 			window.electronAPI.getPlatform(),
 		])
-			.then(([directory, protection, platform]) => {
+			.then(([directory, protection, currentPlatform]) => {
 				if (!active) return;
 				if (directory.success) setRecordings(directory.path);
 				if (protection.success) setHideHud(protection.enabled);
-				setCaptureSupported(supportsHudCaptureProtection(platform));
+				setPlatform(currentPlatform);
+				setCaptureSupported(supportsHudCaptureProtection(currentPlatform));
 			})
 			.catch((error) => toast.error(String(error)));
 		return () => {
@@ -110,6 +113,7 @@ export function DashboardSettings({ onImportFile }: { onImportFile: () => Promis
 							/>
 						</SettingsRow>
 					)}
+					{platform === "win32" && <RtxRecordingSettingsSection />}
 				</SettingsCategory>
 				<SettingsCategory category="advanced">
 					{import.meta.env.DEV && (
