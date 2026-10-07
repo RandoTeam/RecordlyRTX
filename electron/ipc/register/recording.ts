@@ -14,6 +14,7 @@ import {
 } from "electron";
 import { getHudCaptureExcludedProcessIds } from "../../../src/lib/hudCaptureProtection";
 import { showCursor } from "../../cursorHider";
+import { readAppSetting } from "../../appSettingsStore";
 import { getHudOverlayCaptureProtectionEnabled, beginHudCaptureProtection } from "../../windows";
 import { ALLOW_RECORDLY_WINDOW_CAPTURE } from "../constants";
 import { startWindowBoundsCapture, stopWindowBoundsCapture } from "../cursor/bounds";
@@ -465,9 +466,28 @@ export function registerRecordingHandlers(
 						captureTarget.kind === "display" ? captureTarget.bounds : null;
 					setWindowsOrphanedMicAudioPath(null);
 
+					const rtxSettings =
+						(readAppSetting("rtxRecordingSettings") as Record<string, unknown> | null) ?? {};
+					const fps =
+						typeof rtxSettings.fps === "number" && rtxSettings.fps > 0 ? rtxSettings.fps : 60;
+					const codec = typeof rtxSettings.codec === "string" ? rtxSettings.codec : "hevc";
+					const rateControl =
+						typeof rtxSettings.rateControl === "string" ? rtxSettings.rateControl : "vbr";
+					const bitrate =
+						typeof rtxSettings.bitrateMbps === "number" && rtxSettings.bitrateMbps > 0
+							? Math.round(rtxSettings.bitrateMbps * 1_000_000)
+							: 35_000_000;
+					const qp = typeof rtxSettings.cqpLevel === "number" ? rtxSettings.cqpLevel : 20;
+					const zeroCopy = rtxSettings.zeroCopy !== false;
+
 					const config: Record<string, unknown> = {
 						outputPath: tempVideoPath,
-						fps: 60,
+						fps,
+						codec,
+						rateControl,
+						bitrate,
+						qp,
+						zeroCopy,
 					};
 
 					if (captureTarget.kind === "invalid-window") {
