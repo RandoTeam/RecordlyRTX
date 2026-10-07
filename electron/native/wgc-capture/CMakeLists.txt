@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(wgc-capture LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_executable(wgc-capture
@@ -13,6 +13,7 @@ add_executable(wgc-capture
 )
 
 target_compile_options(wgc-capture PRIVATE /EHsc /W3 /utf-8)
+target_compile_definitions(wgc-capture PRIVATE _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
 
 target_link_libraries(wgc-capture PRIVATE
   windowsapp

@@ -50,6 +50,11 @@ struct CaptureConfig {
     bool hasDisplayBounds = false;
     bool captureSystemAudio = false;
     bool captureMic = false;
+    std::string codec = "hevc";
+    std::string rateControl = "vbr";
+    int bitrate = 0;
+    int qp = 20;
+    bool zeroCopy = true;
 };
 
 static bool parseSimpleJson(const std::string& json, CaptureConfig& config) {
@@ -153,6 +158,22 @@ static bool parseSimpleJson(const std::string& json, CaptureConfig& config) {
         config.displayW = dw;
         config.displayH = dh;
         config.hasDisplayBounds = true;
+    }
+
+    std::string codec = findString("codec");
+    if (!codec.empty()) config.codec = codec;
+
+    std::string rateControl = findString("rateControl");
+    if (!rateControl.empty()) config.rateControl = rateControl;
+
+    int bitrate = findInt("bitrate");
+    if (bitrate > 0) config.bitrate = bitrate;
+
+    int qp = findInt("qp");
+    if (qp > 0) config.qp = qp;
+
+    if (json.find("\"zeroCopy\"") != std::string::npos) {
+        config.zeroCopy = findBool("zeroCopy");
     }
 
     return true;
@@ -323,6 +344,10 @@ int main(int argc, char* argv[]) {
         }
 
         if (!monitor) {
+            monitor = MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+        }
+
+        if (!monitor) {
             std::cerr << "ERROR: Could not find monitor for displayId " << config.displayId << std::endl;
             return 1;
         }
@@ -343,7 +368,8 @@ int main(int argc, char* argv[]) {
     MFEncoder encoder;
     std::wstring outputPathW = utf8ToWide(config.outputPath);
     if (!encoder.initialize(outputPathW, captureWidth, captureHeight, config.fps,
-                           session.device(), session.context())) {
+                           session.device(), session.context(),
+                           config.codec, config.rateControl, config.bitrate, config.qp, config.zeroCopy)) {
         std::cerr << "ERROR: Failed to initialize Media Foundation encoder" << std::endl;
         return 1;
     }
