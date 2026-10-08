@@ -10,7 +10,7 @@
     "node_modules/uiohook-napi/**",
     "electron/native/bin/**"
   ],
-  "productName": "Recordly",
+  "productName": "RecordlyRTX",
   "protocols": [
     {
       "name": "Recordly authentication",
@@ -52,8 +52,8 @@
   "publish": [
     {
       "provider": "github",
-      "owner": "webadderall",
-      "repo": "Recordly",
+      "owner": "RandoTeam",
+      "repo": "RecordlyRTX",
       "tagNamePrefix": "v",
       "publishAutoUpdate": true
     }
@@ -117,7 +117,7 @@
       "nsis"
     ],
     "icon": "icons/icons/win/icon.ico",
-    "executableName": "Recordly",
+    "executableName": "RecordlyRTX",
     "artifactName": "${productName}-windows-${arch}.${ext}"
   },
   "nsis": {
@@ -125,6 +125,6 @@
     "allowToChangeInstallationDirectory": true,
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
-    "shortcutName": "Recordly"
+    "shortcutName": "RecordlyRTX"
   }
 }
