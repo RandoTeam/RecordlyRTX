@@ -62,6 +62,15 @@ bool WgcSession::createD3DDevice() {
         return false;
     }
 
+    ComPtr<ID3D10Multithread> multithread;
+    if (SUCCEEDED(d3dContext_.As(&multithread))) {
+        multithread->SetMultithreadProtected(TRUE);
+        std::cerr << "Multithread protection enabled on D3D11 immediate context." << std::endl;
+    } else if (SUCCEEDED(d3dDevice_.As(&multithread))) {
+        multithread->SetMultithreadProtected(TRUE);
+        std::cerr << "Multithread protection enabled on D3D11 device." << std::endl;
+    }
+
     return true;
 }
 

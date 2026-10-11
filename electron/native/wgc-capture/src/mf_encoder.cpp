@@ -38,95 +38,13 @@ MFEncoder::~MFEncoder() {
     finalize();
 }
 
-bool MFEncoder::initZeroCopyPipeline() {
-    if (!device_ || !context_) return false;
-
-    HRESULT hr = device_->QueryInterface(IID_PPV_ARGS(&videoDevice_));
-    if (FAILED(hr) || !videoDevice_) {
-        std::cerr << "VideoDevice query failed: 0x" << std::hex << hr << std::endl;
-        return false;
-    }
-
-    hr = context_->QueryInterface(IID_PPV_ARGS(&videoContext_));
-    if (FAILED(hr) || !videoContext_) {
-        std::cerr << "VideoContext query failed: 0x" << std::hex << hr << std::endl;
-        return false;
-    }
-
-    // Allocate GPU NV12 render target
-    D3D11_TEXTURE2D_DESC nv12Desc = {};
-    nv12Desc.Width = width_;
-    nv12Desc.Height = height_;
-    nv12Desc.MipLevels = 1;
-    nv12Desc.ArraySize = 1;
-    nv12Desc.Format = DXGI_FORMAT_NV12;
-    nv12Desc.SampleDesc.Count = 1;
-    nv12Desc.Usage = D3D11_USAGE_DEFAULT;
-    nv12Desc.BindFlags = D3D11_BIND_RENDER_TARGET;
-
-    hr = device_->CreateTexture2D(&nv12Desc, nullptr, &zeroCopyNv12Texture_);
-    if (FAILED(hr)) {
-        std::cerr << "Failed to allocate GPU NV12 texture: 0x" << std::hex << hr << std::endl;
-        return false;
-    }
-
-    // Setup Video Processor Enumerator
-    D3D11_VIDEO_PROCESSOR_CONTENT_DESC vpDesc = {};
-    vpDesc.InputFrameFormat = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
-    vpDesc.InputWidth = width_;
-    vpDesc.InputHeight = height_;
-    vpDesc.OutputWidth = width_;
-    vpDesc.OutputHeight = height_;
-    vpDesc.InputFrameRate.Numerator = fps_;
-    vpDesc.InputFrameRate.Denominator = 1;
-    vpDesc.OutputFrameRate.Numerator = fps_;
-    vpDesc.OutputFrameRate.Denominator = 1;
-    vpDesc.Usage = D3D11_VIDEO_USAGE_OPTIMAL_QUALITY;
-
-    hr = videoDevice_->CreateVideoProcessorEnumerator(&vpDesc, &videoProcessorEnum_);
-    if (FAILED(hr) || !videoProcessorEnum_) {
-        std::cerr << "CreateVideoProcessorEnumerator failed: 0x" << std::hex << hr << std::endl;
-        return false;
-    }
-
-    UINT flags = 0;
-    hr = videoProcessorEnum_->CheckVideoProcessorFormat(DXGI_FORMAT_B8G8R8A8_UNORM, &flags);
-    if (FAILED(hr) || !(flags & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_INPUT)) {
-        std::cerr << "BGRA input not supported by video processor" << std::endl;
-        return false;
-    }
-
-    hr = videoDevice_->CreateVideoProcessor(videoProcessorEnum_.Get(), 0, &videoProcessor_);
-    if (FAILED(hr) || !videoProcessor_) {
-        std::cerr << "CreateVideoProcessor failed: 0x" << std::hex << hr << std::endl;
-        return false;
-    }
-
-    // Output view for NV12
-    D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC outViewDesc = {};
-    outViewDesc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
-    outViewDesc.Texture2D.MipSlice = 0;
-
-    hr = videoDevice_->CreateVideoProcessorOutputView(
-        zeroCopyNv12Texture_.Get(),
-        videoProcessorEnum_.Get(),
-        &outViewDesc,
-        &vpOutputView_);
-    if (FAILED(hr)) {
-        std::cerr << "CreateVideoProcessorOutputView failed: 0x" << std::hex << hr << std::endl;
-        return false;
-    }
-
-    return true;
-}
-
 bool MFEncoder::initialize(const std::wstring& outputPath, int width, int height, int fps,
                            ID3D11Device* device, ID3D11DeviceContext* context,
                            const std::string& codec,
                            const std::string& rateControl,
                            int bitrate,
                            int qp,
-                           bool zeroCopy) {
+                           bool /*zeroCopy*/) {
     std::lock_guard<std::mutex> lock(mutex_);
 
     if (initialized_) return false;
@@ -148,7 +66,6 @@ bool MFEncoder::initialize(const std::wstring& outputPath, int width, int height
     rateControl_ = rateControl.empty() ? "vbr" : rateControl;
     bitrate_ = bitrate;
     qp_ = qp > 0 ? qp : 20;
-    zeroCopyRequested_ = zeroCopy;
     device_ = device;
     context_ = context;
 
@@ -197,24 +114,14 @@ bool MFEncoder::initialize(const std::wstring& outputPath, int width, int height
     hr = setBt709LimitedVideoAttributes(inputType.Get());
     if (FAILED(hr)) return false;
 
-    // Create SinkWriter with hardware transform attributes
+    // Create SinkWriter with hardware transform attributes (NVENC hardware acceleration)
     ComPtr<IMFAttributes> writerAttrs;
     hr = MFCreateAttributes(&writerAttrs, 3);
     if (FAILED(hr)) return false;
 
     writerAttrs->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE);
     writerAttrs->SetUINT32(MF_LOW_LATENCY, TRUE);
-
-    if (zeroCopyRequested_) {
-        UINT resetToken = 0;
-        hr = MFCreateDXGIDeviceManager(&resetToken, &dxgiDeviceManager_);
-        if (SUCCEEDED(hr) && dxgiDeviceManager_) {
-            hr = dxgiDeviceManager_->ResetDevice(device_, resetToken);
-            if (SUCCEEDED(hr)) {
-                writerAttrs->SetUnknown(MF_SINK_WRITER_D3D_MANAGER, dxgiDeviceManager_.Get());
-            }
-        }
-    }
+    writerAttrs->SetUINT32(MF_SINK_WRITER_DISABLE_THROTTLING, TRUE);
 
     hr = MFCreateSinkWriterFromURL(outputPath.c_str(), nullptr, writerAttrs.Get(), &sinkWriter_);
     if (FAILED(hr)) {
@@ -234,7 +141,7 @@ bool MFEncoder::initialize(const std::wstring& outputPath, int width, int height
         return false;
     }
 
-    // Apply ICodecAPI properties if accessible
+    // Apply ICodecAPI properties for NVIDIA encoder if accessible
     ComPtr<ICodecAPI> codecApi;
     HRESULT hrCodec = sinkWriter_->GetServiceForStream(
         streamIndex_,
@@ -266,17 +173,7 @@ bool MFEncoder::initialize(const std::wstring& outputPath, int width, int height
         return false;
     }
 
-    // Initialize Zero-Copy GPU pipeline
-    if (zeroCopyRequested_ && dxgiDeviceManager_) {
-        zeroCopyActive_ = initZeroCopyPipeline();
-        if (zeroCopyActive_) {
-            std::cerr << "RTX Zero-Copy VRAM pipeline initialized successfully." << std::endl;
-        } else {
-            std::cerr << "Notice: Zero-Copy pipeline unavailable, using optimized staging fallback." << std::endl;
-        }
-    }
-
-    // Allocate fallback staging texture
+    // Allocate staging texture for GPU frame reading
     D3D11_TEXTURE2D_DESC stagingDesc = {};
     stagingDesc.Width = width_;
     stagingDesc.Height = height_;
@@ -326,63 +223,6 @@ bool MFEncoder::initialize(const std::wstring& outputPath, int width, int height
     return true;
 }
 
-bool MFEncoder::processVideoFrameToGpuNv12(ID3D11Texture2D* sourceTexture) {
-    if (!videoDevice_ || !videoContext_ || !videoProcessor_ || !vpOutputView_) return false;
-
-    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC inViewDesc = {};
-    inViewDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
-    inViewDesc.Texture2D.MipSlice = 0;
-
-    ComPtr<ID3D11VideoProcessorInputView> inputView;
-    HRESULT hr = videoDevice_->CreateVideoProcessorInputView(
-        sourceTexture,
-        videoProcessorEnum_.Get(),
-        &inViewDesc,
-        &inputView);
-    if (FAILED(hr) || !inputView) return false;
-
-    D3D11_VIDEO_PROCESSOR_STREAM streamData = {};
-    streamData.Enable = TRUE;
-    streamData.pInputSurface = inputView.Get();
-
-    hr = videoContext_->VideoProcessorBlt(
-        videoProcessor_.Get(),
-        vpOutputView_.Get(),
-        0,
-        1,
-        &streamData);
-
-    return SUCCEEDED(hr);
-}
-
-bool MFEncoder::writeZeroCopySampleLocked(int64_t timestampHns) {
-    if (!sinkWriter_ || !zeroCopyNv12Texture_) return false;
-
-    ComPtr<IMFMediaBuffer> buffer;
-    HRESULT hr = MFCreateDXGISurfaceBuffer(
-        __uuidof(ID3D11Texture2D),
-        zeroCopyNv12Texture_.Get(),
-        0,
-        FALSE,
-        &buffer);
-    if (FAILED(hr) || !buffer) return false;
-
-    const DWORD totalBytes = static_cast<DWORD>(width_ * height_ * 3 / 2);
-    buffer->SetCurrentLength(totalBytes);
-
-    ComPtr<IMFSample> sample;
-    hr = MFCreateSample(&sample);
-    if (FAILED(hr) || !sample) return false;
-
-    sample->AddBuffer(buffer.Get());
-    sample->SetSampleTime(timestampHns);
-    const int64_t frameDurationHns = 10000000LL / fps_;
-    sample->SetSampleDuration(frameDurationHns);
-
-    hr = sinkWriter_->WriteSample(streamIndex_, sample.Get());
-    return SUCCEEDED(hr);
-}
-
 bool MFEncoder::writeFrame(ID3D11Texture2D* texture, int64_t timestampHns) {
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -391,19 +231,6 @@ bool MFEncoder::writeFrame(ID3D11Texture2D* texture, int64_t timestampHns) {
     int64_t normalizedTimestampHns = 0;
     normalizeWriteTimestampHnsLocked(timestampHns, normalizedTimestampHns);
 
-    // Fast-path: Zero-Copy GPU execution
-    if (zeroCopyActive_) {
-        if (processVideoFrameToGpuNv12(texture)) {
-            bool wrote = writeZeroCopySampleLocked(normalizedTimestampHns);
-            if (wrote) {
-                lastSampleTimeHns_ = normalizedTimestampHns;
-                return true;
-            }
-        }
-        // If GPU blt or surface buffer write fails, fall through to staging path
-    }
-
-    // Staging fallback path
     D3D11_TEXTURE2D_DESC sourceDesc = {};
     texture->GetDesc(&sourceDesc);
 
@@ -513,12 +340,10 @@ bool MFEncoder::extendLastFrameToLocked(int64_t timestampHns) {
 
     int64_t syntheticTimeHns = nextTargetTimeHns;
     while (syntheticTimeHns <= timestampHns) {
-        bool wrote = false;
-        if (zeroCopyActive_) {
-            wrote = writeZeroCopySampleLocked(syntheticTimeHns);
-        } else if (!lastFrameBuffer_.empty()) {
-            wrote = writeNv12SampleLocked(lastFrameBuffer_, syntheticTimeHns);
+        if (lastFrameBuffer_.empty()) {
+            break;
         }
+        bool wrote = writeNv12SampleLocked(lastFrameBuffer_, syntheticTimeHns);
         if (!wrote) return false;
         lastSampleTimeHns_ = syntheticTimeHns;
         syntheticTimeHns += frameDurationHns;
@@ -562,14 +387,6 @@ bool MFEncoder::finalize() {
 
     if (!initialized_) return false;
     initialized_ = false;
-    zeroCopyActive_ = false;
-
-    vpOutputView_.Reset();
-    zeroCopyNv12Texture_.Reset();
-    videoProcessor_.Reset();
-    videoProcessorEnum_.Reset();
-    videoContext_.Reset();
-    videoDevice_.Reset();
 
     stagingTexture_.Reset();
     resizeCompositeView_.Reset();
@@ -582,7 +399,6 @@ bool MFEncoder::finalize() {
     if (!sinkWriter_) return false;
     HRESULT hr = sinkWriter_->Finalize();
     sinkWriter_.Reset();
-    dxgiDeviceManager_.Reset();
     MFShutdown();
     return SUCCEEDED(hr);
 }
